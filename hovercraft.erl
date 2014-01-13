@@ -171,16 +171,16 @@ query_view(DbName, DesignName, ViewName, ViewFoldFun) ->
 
 % special case for special all_docs view
 query_view(DbName, undefined, <<"_all_docs">>, _ViewFoldFun, #mrargs{
-            limit = Limit,
-            skip = SkipCount,
+            limit = _Limit,
+            skip = _SkipCount,
             stale = _Stale,
-            direction = Dir,
+            direction = _Dir,
             group_level = _GroupLevel,
-            start_key = StartKey,
-            start_key_docid = StartDocId,
-            end_key = EndKey,
-            end_key_docid = EndDocId,
-            inclusive_end = Inclusive
+            start_key = _StartKey,
+            start_key_docid = _StartDocId,
+            end_key = _EndKey,
+            end_key_docid = _EndDocId,
+            inclusive_end = _Inclusive
         }=QueryArgs) ->
     {ok, Db} = open_db(DbName),
     Acc = {0, 0, []},
@@ -188,13 +188,13 @@ query_view(DbName, undefined, <<"_all_docs">>, _ViewFoldFun, #mrargs{
 
     
 query_view(DbName, DesignName, ViewName, ViewFoldFun, #mrargs{
-            limit = Limit,
-            skip = SkipCount,
-            stale = Stale,
-            direction = Dir,
-            group_level = GroupLevel,
-            start_key = StartKey,
-            start_key_docid = StartDocId
+            limit = _Limit,
+            skip = _SkipCount,
+            stale = _Stale,
+            direction = _Dir,
+            group_level = _GroupLevel,
+            start_key = _StartKey,
+            start_key_docid = _StartDocId
         }=QueryArgs) ->
 
 
@@ -202,7 +202,7 @@ query_view(DbName, DesignName, ViewName, ViewFoldFun, #mrargs{
     % get view reference
     DesignId = <<"_design/", DesignName/binary>>,
 
-    {ok, {Type, View}, Sig, Args3} = couch_mrview_util:get_view(Db,DesignId,ViewName,QueryArgs),
+    {ok, {Type, _View}, _Sig, Args3} = couch_mrview_util:get_view(Db,DesignId,ViewName,QueryArgs),
 
     Acc = {0, 0, []},
     case Type of 
@@ -242,31 +242,6 @@ ejson_to_couch_doc({DocProps}) ->
             {DocProps}
     end,
     couch_doc:from_json_obj(Doc).
-
-start_map_view_fold_fun(_Req, _Etag, _RowCount, Offset, _Acc, _UpdateSeq) ->
-    {ok, nil, {Offset, []}}.
-
-make_map_row_fold_fun(ViewFoldFun) ->
-    fun(_Resp, _Db, {{Key, DocId}, Value}, _IncludeDocs, {Offset, Acc}) ->
-        {Go, NewAcc} = ViewFoldFun({{Key, DocId}, Value}, Acc),
-        {Go, {Offset, NewAcc}}
-    end.
-
-make_include_docs_row_fold_fun() ->
-    fun(_Resp, Db, Doc, IncludeDocs, {Offset, Acc}) ->
-        D = couch_httpd_view:view_row_obj(Db, Doc, IncludeDocs),
-        {ok, {Offset, [D | Acc]}}
-    end.
-
-start_reduce_view_fold_fun(_Req, _Etag, _Acc0, _UpdateSeq) ->
-    {ok, nil, []}.
-
-make_reduce_row_fold_fun(ViewFoldFun) ->
-    fun(_Resp, {Key, Value}, Acc) ->
-        {Go, NewAcc} = ViewFoldFun({Key, Value}, Acc),
-        {Go, NewAcc}
-    end.
-
 
 attachment_streamer(DbName, DocId, AName) ->
     {ok, Db} = open_db(DbName),
