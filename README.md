@@ -8,6 +8,10 @@ An easy direct Erlang CouchDB library.
 
 Use this to abstract CouchDB behind a simple Erlang function call. Currently supports the database and document APIs, with views on the way.
 
+## Branch couchdb1.3.x
+This branch works with couchb > 1.3.
+The most significant compatibility change, is that it uses the mrargs record from couch_mrview.hrl
+
 ## Basic Usage
 
 Hovercraft master is only compatible with CouchDB trunk. If the tests fail, 

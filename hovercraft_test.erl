@@ -13,7 +13,8 @@
 
 -export([all/0, all/1, lightning/0, lightning/1]).
 
--include("src/couchdb/couch_db.hrl").
+-include_lib("/home/sh/apache-couchdb-1.5.0/src/couchdb/couch_db.hrl").
+-include_lib("/home/sh/apache-couchdb-1.5.0/src/couch_mrview/include/couch_mrview.hrl").
 
 -define(ADMIN_USER_CTX, {user_ctx, #user_ctx{roles=[<<"_admin">>]}}).
 
@@ -145,7 +146,21 @@ should_query_views(DbName) ->
     % make docs
     {ok, _RevInfos} = make_test_docs(DbName, {[{<<"hovercraft">>, <<"views rule">>}]}, 20),
     should_query_map_view(DbName, DDocName),
-    should_query_reduce_view(DbName, DDocName).
+    should_query_reduce_view(DbName, DDocName),
+    should_query_all_docs_view(DbName).
+
+should_query_all_docs_view(DbName) ->
+    {ok, {RowCount, Offset, Rows}} = hovercraft:query_view(DbName, undefined, <<"_all_docs">>),
+    23 = length(Rows),
+    RowCount = length(Rows),
+    0 = Offset,
+    % assert we got every row
+    lists:foldl(fun({{RKey, RDocId}, RValue}, _) -> 
+            1 = RValue,
+            {ok, {DocProps}} = hovercraft:open_doc(RDocId),
+            RKey = proplists:get_value(<<"_rev">>, DocProps)
+        end, Rows, []).
+
 
 should_query_map_view(DbName, DDocName) ->
     % use the default query arguments and row collector function
@@ -167,7 +182,7 @@ should_query_reduce_view(DbName, DDocName) ->
         hovercraft:query_view(DbName, DDocName, <<"reduce-sum">>),
     {null, 20} = Result,
     {ok, Results} =
-        hovercraft:query_view(DbName, DDocName, <<"reduce-sum">>, #view_query_args{
+        hovercraft:query_view(DbName, DDocName, <<"reduce-sum">>, #mrargs{
             group_level = exact
         }),
     [{_,20}] = Results.
@@ -224,20 +239,27 @@ make_test_docs(DbName, Doc, Count) ->
 
 do_chain(SourceDbName, SourceDDocName, SourceView, TargetDbName) ->
     {ok, Db} = hovercraft:open_db(TargetDbName),
-    CopyToDbFun = fun
-        (Row, Acc) when length(Acc) > 50 ->
-            hovercraft:save_bulk(Db, [row_to_doc(Row)|Acc]),
-            {ok, []};
-        (Row, Acc) ->
-            {ok, [row_to_doc(Row)|Acc]}
-    end,
-    {ok, Acc1} = hovercraft:query_view(SourceDbName, SourceDDocName, SourceView, CopyToDbFun, #view_query_args{
+    CopyToDbFun = 
+        fun
+            ({meta, Meta}, {RowCount, OffSet, Rows})->
+                {ok, {RowCount, case couch_util:get_value(offset, Meta) of
+                                    undefined -> OffSet;
+                                    New_Offset -> New_Offset
+                                end, Rows}};
+            ({row, Row}, {RowCount, OffSet,  Rows}) when RowCount > 50 ->
+                hovercraft:save_bulk(Db, [row_to_doc(Row)|Rows]),
+                {ok, {0, OffSet,  []}};
+            ({row, Row}, {RowCount, OffSet,  Rows}) ->
+                {ok, {RowCount+1, OffSet,[row_to_doc(Row)|Rows]}};
+            (complete, {RowCount, OffSet, Rows}) -> {ok, {RowCount,OffSet,lists:reverse(Rows)}}
+        end,
+    {ok, Acc1} = hovercraft:query_view(SourceDbName, SourceDDocName, SourceView, CopyToDbFun, #mrargs{
         group_level = exact
     }),
     hovercraft:save_bulk(Db, Acc1),
     ok.
 
-row_to_doc({Key, Value}) ->
+row_to_doc([{key,Key}, {value,Value}]) ->
     {[
     {<<"key">>, Key},
     {<<"value">>,Value}

@@ -7,7 +7,7 @@
 %%% License : Apache 2.0
 %%%-------------------------------------------------------------------
 -module(hovercraft).
--vsn("0.1.4").
+-vsn("0.1.6").
 
 %% see README.md for usage information
 
@@ -32,7 +32,8 @@
 % It calls into CouchDB's database access functions, so it needs access
 % to the disk. To hook it up, make sure hovercraft is in the Erlang load 
 % path and ensure that the following line points to CouchDB's hrl file.
--include_lib("src/couchdb/couch_db.hrl").
+-include_lib("/home/sh/apache-couchdb-1.5.0/src/couchdb/couch_db.hrl").
+-include_lib("/home/sh/apache-couchdb-1.5.0/src/couch_mrview/include/couch_mrview.hrl").
 
 -define(ADMIN_USER_CTX, {user_ctx, #user_ctx{roles=[<<"_admin">>]}}).
 
@@ -157,121 +158,80 @@ next_attachment_bytes(Pid) ->
     end.
 
 query_view(DbName, DesignName, ViewName) ->
-    query_view(DbName, DesignName, ViewName, #view_query_args{}).
+    query_view(DbName, DesignName, ViewName, #mrargs{}).
    
-query_view(DbName, DesignName, ViewName, #view_query_args{}=QueryArgs) ->
+query_view(DbName, DesignName, ViewName, #mrargs{}=QueryArgs) ->
     % provide a default row collector fun
     % don't use this on big data it will balloon in memory
-    RowCollectorFun = fun(Row, Acc) ->
-        {ok, [Row | Acc]}
-    end,
+    RowCollectorFun = fun hovercraft_cb/2,
     query_view(DbName, DesignName, ViewName, RowCollectorFun, QueryArgs);
 
 query_view(DbName, DesignName, ViewName, ViewFoldFun) ->
-    query_view(DbName, DesignName, ViewName, ViewFoldFun, #view_query_args{}).
+    query_view(DbName, DesignName, ViewName, ViewFoldFun, #mrargs{}).
 
 % special case for special all_docs view
-query_view(DbName, undefined, <<"_all_docs">>, _ViewFoldFun, #view_query_args{
+query_view(DbName, undefined, <<"_all_docs">>, _ViewFoldFun, #mrargs{
             limit = Limit,
             skip = SkipCount,
             stale = _Stale,
             direction = Dir,
             group_level = _GroupLevel,
             start_key = StartKey,
-            start_docid = StartDocId,
+            start_key_docid = StartDocId,
             end_key = EndKey,
-            end_docid = EndDocId,
+            end_key_docid = EndDocId,
             inclusive_end = Inclusive
         }=QueryArgs) ->
     {ok, Db} = open_db(DbName),
-    {ok, Info} = couch_db:get_db_info(Db),
-    TotalRowCount = proplists:get_value(doc_count, Info),
-    StartId = if is_binary(StartKey) -> StartKey;
-        true -> StartDocId
-        end,
-    EndId = if is_binary(EndKey) -> EndKey;
-        true -> EndDocId
-        end,
-    FoldAccInit = {Limit, SkipCount, undefined, []},
-    UpdateSeq = couch_db:get_update_seq(Db),
-    FoldlFun = couch_httpd_view:make_view_fold_fun(nil, QueryArgs, <<"">>, Db,
-        UpdateSeq, TotalRowCount, #view_fold_helper_funs{
-            reduce_count = fun couch_db:enum_docs_reduce_to_count/1,
-            start_response = fun start_map_view_fold_fun/6,
-            send_row = make_include_docs_row_fold_fun()
-        }),
-    AdapterFun = fun(#full_doc_info{id=Id}=FullDocInfo, Offset, Acc) ->
-        case couch_doc:to_doc_info(FullDocInfo) of
-        #doc_info{revs=[#rev_info{deleted=false, rev=Rev}|_]} ->
-            FoldlFun({{Id, Id}, {[{rev, couch_doc:rev_to_str(Rev)}]}}, Offset, Acc);
-        #doc_info{revs=[#rev_info{deleted=true}|_]} ->
-            {ok, Acc}
-        end
-    end,
-    Res  = couch_db:enum_docs(Db,
-        AdapterFun, FoldAccInit, [{start_key, StartId}, {dir, Dir},
-            {if Inclusive -> end_key; true -> end_key_gt end, EndId}]),
-    Res;
+    Acc = {0, 0, []},
+    couch_mrview:query_all_docs(Db, QueryArgs#mrargs{reduce=false}, fun hovercraft_cb/2, Acc);
 
     
-query_view(DbName, DesignName, ViewName, ViewFoldFun, #view_query_args{
+query_view(DbName, DesignName, ViewName, ViewFoldFun, #mrargs{
             limit = Limit,
             skip = SkipCount,
             stale = Stale,
             direction = Dir,
             group_level = GroupLevel,
             start_key = StartKey,
-            start_docid = StartDocId
+            start_key_docid = StartDocId
         }=QueryArgs) ->
+
+
     {ok, Db} = open_db(DbName),
     % get view reference
     DesignId = <<"_design/", DesignName/binary>>,
-    case couch_view:get_map_view(Db, DesignId, ViewName, Stale) of
-        {ok, View, _Group} ->
-            {ok, RowCount} = couch_view:get_row_count(View),
-            Start = {StartKey, StartDocId},
-            UpdateSeq = couch_db:get_update_seq(Db),
-            FoldlFun = couch_httpd_view:make_view_fold_fun(nil, 
-                QueryArgs, <<"">>, Db, UpdateSeq, RowCount, 
-                #view_fold_helper_funs{
-                    reduce_count = fun couch_view:reduce_to_count/1,
-                    start_response = fun start_map_view_fold_fun/6,
-                    send_row = make_map_row_fold_fun(ViewFoldFun)
-                }),
-            FoldAccInit = {Limit, SkipCount, undefined, []},
-            {ok, _, {_Lim, _, _, {Offset, ViewFoldAcc}}} = 
-                couch_view:fold(View, FoldlFun, FoldAccInit,
-                                [{dir, Dir}, {start_key, Start}]),
-            {ok, {RowCount, Offset, ViewFoldAcc}};
-        {not_found, Reason} ->
-            case couch_view:get_reduce_view(Db, DesignId, ViewName, Stale) of
-                {ok, View, _Group} ->
-                    UpdateSeq = couch_db:get_update_seq(Db),
-                    {ok, GroupRowsFun, RespFun} = 
-                        couch_httpd_view:make_reduce_fold_funs(nil, 
-                            GroupLevel, QueryArgs, <<"">>, 
-                            UpdateSeq,
-                            #reduce_fold_helper_funs{
-                                start_response = fun start_reduce_view_fold_fun/4,
-                                send_row = make_reduce_row_fold_fun(ViewFoldFun)
-                            }),
-                    FoldAccInit = {Limit, SkipCount, undefined, []},
-                    Opts = [{key_group_fun, GroupRowsFun} |
-                            couch_httpd_view:make_key_options(QueryArgs)],
-                    {ok, {_, _, _, AccResult}} = couch_view:fold_reduce(View,
-                                                                        RespFun,
-                                                                        FoldAccInit,
-                                                                        Opts),
 
-                    {ok, AccResult};
-                _ ->
-                    throw({not_found, Reason})
+    {ok, {Type, View}, Sig, Args3} = couch_mrview_util:get_view(Db,DesignId,ViewName,QueryArgs),
+
+    Acc = {0, 0, []},
+    case Type of 
+        map ->
+            couch_mrview:query_view(Db, DesignId, ViewName, Args3#mrargs{reduce=false}, ViewFoldFun, Acc);
+        red ->
+            case couch_mrview:query_view(Db, DesignId, ViewName, Args3#mrargs{reduce=QueryArgs#mrargs.reduce}, ViewFoldFun, Acc) of
+                {ok,{_,_,[[{key,Key},{value,Value}]]}} ->
+                    case QueryArgs#mrargs.group_level of
+                        exact -> {ok,[{Key,Value}]};
+                        _ -> {ok,[{null,Value}]}
+                    end;
+                {ok,{_,_,Rows}} -> {ok,Rows}
             end
     end.
+
+    
 
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+
+hovercraft_cb({meta, Meta}, {RowCount, OffSet, Rows}) -> 
+   {ok, {RowCount, case couch_util:get_value(offset, Meta) of
+                       undefined -> OffSet;
+                       New_Offset -> New_Offset
+                   end, Rows}};
+hovercraft_cb({row, Row}, {RowCount, OffSet,  Rows}) -> {ok, {RowCount+1,OffSet,[Row | Rows]}};
+hovercraft_cb(complete, {RowCount, OffSet, Rows}) -> {ok, {RowCount,OffSet,lists:reverse(Rows)}}.
 
 ejson_to_couch_doc({DocProps}) ->
     Doc = case proplists:get_value(<<"_id">>, DocProps) of
