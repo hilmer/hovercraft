@@ -44,6 +44,8 @@ custom batch sizes. The docs in the speed of light test are small, feel
 free to edit the source code to try larger docs.
 
 ## Credits
+Changed to use couchdb mrview, so it works with couchdb > 1.3
+Copyright 2014 Søren Hilmer <sh@widetrail.dk>
 
 Released at #CouchHack '09
 Apache 2.0 License 
