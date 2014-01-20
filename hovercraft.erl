@@ -90,14 +90,21 @@ db_info(DbName) ->
     couch_db:get_db_info(Db).
 
 %%--------------------------------------------------------------------
+%% Function: open_doc(Db, DocId) -> {ok,Doc} | {error,Error}
+%% Description: Gets the eJSON form of the Document of an opened database
+%%--------------------------------------------------------------------
+open_doc(#db{}=Db, DocId) ->
+    CouchDoc = couch_httpd_db:couch_doc_open(Db, DocId, nil, []),
+    Doc = couch_doc:to_json_obj(CouchDoc, []),
+    {ok, Doc};
+
+%%--------------------------------------------------------------------
 %% Function: open_doc(DbName, DocId) -> {ok,Doc} | {error,Error}
 %% Description: Gets the eJSON form of the Document
 %%--------------------------------------------------------------------
 open_doc(DbName, DocId) ->
     {ok, Db} = open_db(DbName),
-    CouchDoc = couch_httpd_db:couch_doc_open(Db, DocId, nil, []),
-    Doc = couch_doc:to_json_obj(CouchDoc, []),
-    {ok, Doc}.
+    hovercraft:open_doc(Db, DocId).
         
 %%--------------------------------------------------------------------
 %% Function: save_doc(DbName, Doc) -> {ok, EJsonInfo} | {error,Error}

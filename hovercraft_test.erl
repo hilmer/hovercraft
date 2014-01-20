@@ -105,21 +105,29 @@ should_error_on_missing_doc(DbName) ->
     end.
 
 should_save_bulk_docs(DbName) ->
-    Docs = [{[{<<"foo">>, <<"bar">>}]} || _Seq <- lists:seq(1, 100)],
+    Docs = [{[{<<"foo">>, <<Seq:8>>}]} || Seq <- lists:seq(1, 100)],
     {ok, RevInfos} = hovercraft:save_bulk(DbName, Docs),
-    lists:foldl(fun(Row, _) ->
-            DocId = proplists:get_value(id, Row),
-            {ok, _Doc} = hovercraft:open_doc(DbName, DocId)
-        end, RevInfos, []).
+    L = lists:foldl(fun({[{ok,true},{id,DocId},{rev,Rev}]}, Acc) ->
+                            {ok, {Doc}} = hovercraft:open_doc(DbName, DocId),
+                            [_Id, {<<"_rev">>, Rev}, {<<"foo">>, <<Value:8>>}] = Doc,
+                            Rev = proplists:get_value(<<"_rev">>, Doc),
+                            Value = Acc + 1,
+                            Acc + 1
+                    end, 0, RevInfos),
+    L = 100.
 
 should_save_bulk_and_open_with_db(DbName) ->
     {ok, Db} = hovercraft:open_db(DbName),
-    Docs = [{[{<<"foo">>, <<"bar">>}]} || _Seq <- lists:seq(1, 100)],
+    Docs = [{[{<<"foo">>, <<Seq:8>>}]} || Seq <- lists:seq(1, 100)],
     {ok, RevInfos} = hovercraft:save_bulk(Db, Docs),
-    lists:foldl(fun(Row, _) ->
-            DocId = proplists:get_value(id, Row),
-            {ok, _Doc} = hovercraft:open_doc(Db, DocId)
-        end, RevInfos, []).
+    L = lists:foldl(fun({[{ok,true},{id,DocId},{rev,Rev}]}, Acc) ->
+                            {ok, {Doc}} = hovercraft:open_doc(DbName, DocId),
+                            [_Id, {<<"_rev">>, Rev}, {<<"foo">>, <<Value:8>>}] = Doc,
+                            Rev = proplists:get_value(<<"_rev">>, Doc),
+                            Value = Acc + 1,
+                            Acc + 1
+                    end, 0, RevInfos),
+    L = 100.
 
 should_stream_attachment(DbName) ->
     % setup
@@ -145,8 +153,11 @@ should_query_views(DbName) ->
     {ok, {_Resp}} = hovercraft:save_doc(DbName, make_test_ddoc(DDocName)),
     % make docs
     {ok, _RevInfos} = make_test_docs(DbName, {[{<<"hovercraft">>, <<"views rule">>}]}, 20),
+    ?LOG_INFO("Query map view ", []),
     should_query_map_view(DbName, DDocName),
+    ?LOG_INFO("Query reduce view ", []),
     should_query_reduce_view(DbName, DDocName),
+    ?LOG_INFO("Query all docs view ", []),
     should_query_all_docs_view(DbName).
 
 should_query_all_docs_view(DbName) ->
@@ -155,11 +166,12 @@ should_query_all_docs_view(DbName) ->
     RowCount = length(Rows),
     0 = Offset,
     % assert we got every row
-    lists:foldl(fun({{RKey, RDocId}, RValue}, _) -> 
-            1 = RValue,
-            {ok, {DocProps}} = hovercraft:open_doc(RDocId),
-            RKey = proplists:get_value(<<"_rev">>, DocProps)
-        end, Rows, []).
+    ?LOG_INFO("Got all documents ~p ", [RowCount]),
+    RowCount = lists:foldl(fun([{id,RDocId},{key,_DocKey}, {value,_RValue}], Acc) -> 
+                                   {ok, {DocProps}} = hovercraft:open_doc(DbName,RDocId),
+                                   _RKey = proplists:get_value(<<"_rev">>, DocProps),
+                                   Acc + 1
+                           end, 0, Rows).
 
 
 should_query_map_view(DbName, DDocName) ->
@@ -171,11 +183,11 @@ should_query_map_view(DbName, DDocName) ->
     RowCount = length(Rows),
     0 = Offset,
     % assert we got every row
-    lists:foldl(fun({{RKey, RDocId}, RValue}, _) -> 
-            1 = RValue,
-            {ok, {DocProps}} = hovercraft:open_doc(RDocId),
-            RKey = proplists:get_value(<<"_rev">>, DocProps)
-        end, Rows, []).
+    RowCount = lists:foldl(fun([{id,RDocId},{key,_DocKey}, {value,_RValue}], Acc) -> 
+                                   {ok, {DocProps}} = hovercraft:open_doc(DbName, RDocId),
+                                   _RKey = proplists:get_value(<<"_rev">>, DocProps),
+                                   Acc + 1
+                           end, 0, Rows).
 
 should_query_reduce_view(DbName, DDocName) ->
     {ok, [Result]} =
