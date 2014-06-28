@@ -25,7 +25,8 @@
     next_attachment_bytes/1,
     query_view/3,
     query_view/4,
-    query_view/5
+    query_view/5,
+    set_security/2
 ]).
 
 % Hovercraft is designed to run inside the same beam process as CouchDB.
@@ -226,7 +227,12 @@ query_view(DbName, DesignName, ViewName, ViewFoldFun, #mrargs{
             end
     end.
 
-    
+set_security(#db{}=Db, SecurityDoc) ->
+    couch_db:set_security(Db, SecurityDoc);
+set_security(DbName, SecurityDoc) ->
+    {ok, Db} = open_db(DbName),
+    set_security(Db, SecurityDoc).
+
 
 %%--------------------------------------------------------------------
 %%% Internal functions
